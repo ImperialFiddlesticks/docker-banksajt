@@ -37,6 +37,11 @@ export default function Home() {
         >
           Register
         </Link>
+        {process.env.NEXT_PUBLIC_FEATURE_PROMO === "true" && (
+          <button className="mt-4 bg-yellow-400 text-green-900 px-6 py-3 rounded-lg font-medium hover:bg-yellow-300 transition-colors">
+            New: Refer a friend, get 100kr
+          </button>
+        )}
       </section>
     </div>
   );
