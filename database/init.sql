@@ -27,3 +27,12 @@ CREATE TABLE IF NOT EXISTS sessions (
   PRIMARY KEY (token),
   CONSTRAINT sessions_user_id_fk FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS transactions(
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    account_id INT UNSIGNED NOT NULL,
+    amount DECIMAL(12,2) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT transactions_account_id_fk FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE
+);

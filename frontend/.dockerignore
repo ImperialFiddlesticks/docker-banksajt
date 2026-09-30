@@ -3,3 +3,7 @@ node_modules
 coverage
 npm-debug.log*
 .DS_Store
+tests
+playwright.config.ts
+test-results
+playwright-report

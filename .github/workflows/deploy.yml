@@ -50,10 +50,58 @@ jobs:
       - name: Install backend dependencies
         working-directory: ./backend
         run: npm ci
+
+      - name: Run backend unit tests
+        working-directory: ./backend
+        run: npm test
+  e2e:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Install Playwright Chromium and system dependencies
+        working-directory: ./frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Start test stack and wait until healthy
+        run: docker compose -p banksajt-test up -d --build --wait
+
+      - name: Run Playwright tests
+        working-directory: ./frontend
+        run: npm run test:e2e
+
+      - name: Show container logs on failure
+        if: failure()
+        run: docker compose -p banksajt-test logs
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7
+
+      - name: Stop test stack and remove test database
+        if: always()
+        run: docker compose -p banksajt-test down -v
   deploy:
     runs-on: ubuntu-latest
-    needs: [frontend, backend]
-    if: github.event_name == 'push'
+    needs: [frontend, backend, e2e]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     steps:
       - name: Run Docker on EC2
         uses: appleboy/ssh-action@master

@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 export default function Account() {
   const [amount, setAmount] = useState<number | null>(null);
@@ -36,13 +37,16 @@ export default function Account() {
     e.preventDefault();
     setError("");
     const token = localStorage.getItem("token");
-    const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/me/accounts/transactions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
+    const res = await fetch(
+      `${process.env.NEXT_PUBLIC_API_URL}/me/accounts/transactions`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ token, amount: Number(deposit) }),
       },
-      body: JSON.stringify({ token, amount: Number(deposit) }),
-    });
+    );
     if (!res.ok) {
       const data = await res.json();
       setError(data.error || "Failed to deposit");
@@ -99,6 +103,12 @@ export default function Account() {
           Deposit
         </button>
       </form>
+      <Link
+        href="/transactions"
+        className="mt-6 text-sm text-green-600 hover:underline"
+      >
+        View transactions →
+      </Link>
     </div>
   );
 }
