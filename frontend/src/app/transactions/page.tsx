@@ -55,16 +55,27 @@ export default function Transactions() {
           </p>
         ) : (
           <ul className="divide-y divide-gray-200">
-            {transactions.map((t) => (
-              <li key={t.id} className="flex justify-between py-3">
-                <span className="text-sm text-gray-500">
-                  {new Date(t.createdAt).toLocaleString("sv-SE")}
-                </span>
-                <span className="font-medium text-green-600">
-                  +{t.amount.toFixed(2)} kr
-                </span>
-              </li>
-            ))}
+            {transactions.map((t) => {
+              const isWithdrawal = t.amount < 0;
+              return (
+                <li key={t.id} className="flex justify-between py-3">
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">
+                      {isWithdrawal ? "Withdrawal" : "Deposit"}
+                    </p>
+                    <p className="text-sm text-gray-500">
+                      {new Date(t.createdAt).toLocaleString("sv-SE")}
+                    </p>
+                  </div>
+                  <span
+                    className={`font-medium ${isWithdrawal ? "text-red-600" : "text-green-600"}`}
+                  >
+                    {isWithdrawal ? "-" : "+"}
+                    {Math.abs(t.amount).toFixed(2)} kr
+                  </span>
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>

@@ -8,6 +8,8 @@ export default function Account() {
   const [deposit, setDeposit] = useState("");
   const [error, setError] = useState("");
   const router = useRouter();
+  const [withdrawal, setWithdrawal] = useState("");
+  const [withdrawError, setWithdrawError] = useState("");
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -58,6 +60,31 @@ export default function Account() {
     setDeposit("");
   }
 
+  async function handleWithdraw(e: React.FormEvent) {
+    e.preventDefault();
+    setWithdrawError("");
+    const token = localStorage.getItem("token");
+    const res = await fetch(
+      `${process.env.NEXT_PUBLIC_API_URL}/me/accounts/withdrawals`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ token, amount: Number(withdrawal) }),
+      },
+    );
+    if (!res.ok) {
+      const data = await res.json();
+      setWithdrawError(data.error || "Failed to withdraw");
+      return;
+    }
+
+    const data = await res.json();
+    setAmount(data.amount);
+    setWithdrawal("");
+  }
+
   if (amount === null) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 px-6">
@@ -85,7 +112,7 @@ export default function Account() {
           htmlFor="deposit"
           className="block text-sm font-medium text-gray-700 mb-1"
         >
-          Amount
+          Deposit Amount
         </label>
         <input
           id="deposit"
@@ -103,6 +130,40 @@ export default function Account() {
           Deposit
         </button>
       </form>
+
+      <form
+        onSubmit={handleWithdraw}
+        className="bg-white p-8 rounded-lg shadow-sm w-full max-w-sm mt-8"
+      >
+        <h2 className="text-lg font-bold text-gray-900 mb-4">
+          Make a Withdrawal
+        </h2>
+        {withdrawError && (
+          <p className="text-red-600 text-sm mb-4">{withdrawError}</p>
+        )}
+        <label
+          htmlFor="withdrawal"
+          className="block text-sm font-medium text-gray-700 mb-1"
+        >
+          Withdrawal amount
+        </label>
+        <input
+          id="withdrawal"
+          type="number"
+          value={withdrawal}
+          onChange={(e) => setWithdrawal(e.target.value)}
+          required
+          min="1"
+          className="w-full border border-gray-300 rounded-md px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-green-500"
+        />
+        <button
+          type="submit"
+          className="w-full bg-red-600 text-white py-2 px-4 rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500"
+        >
+          Withdraw
+        </button>
+      </form>
+
       <Link
         href="/transactions"
         className="mt-6 text-sm text-green-600 hover:underline"

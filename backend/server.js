@@ -4,6 +4,7 @@ import cors from "cors";
 
 import mysql from "mysql2/promise";
 import { validateAmount } from "./src/validateAmount.js";
+import { validateWithdrawal } from "./src/validateWithdrawal.js";
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
@@ -139,6 +140,61 @@ app.post("/me/accounts/transactions", async (req, res) => {
     await conn.commit();
 
     res.status(200).json({ amount: Number(account.balance) + amount });
+  } catch (error) {
+    await conn.rollback();
+    console.error(error);
+    res.status(500).json({ error: "Something went wrong" });
+  } finally {
+    conn.release();
+  }
+});
+
+app.post("/me/accounts/withdrawals", async (req, res) => {
+  const { token, amount } = req.body;
+  if (!validateAmount(amount)) {
+    return res.status(400).json({ error: "Invalid amount" });
+  }
+  const [sessionRows] = await pool.query(
+    "SELECT user_id FROM sessions WHERE token = ?",
+    [token],
+  );
+  if (sessionRows.length === 0) {
+    return res.status(401).json({ error: "Invalid token" });
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [accountRows] = await conn.query(
+      "SELECT id, balance FROM accounts WHERE user_id = ? FOR UPDATE",
+      [sessionRows[0].user_id],
+    );
+    if (accountRows.length === 0) {
+      await conn.rollback();
+      return res.status(404).json({ error: "Account not found" });
+    }
+    const account = accountRows[0];
+    const balance = Number(account.balance);
+
+    const result = validateWithdrawal(amount, balance);
+    if (!result.ok) {
+      await conn.rollback();
+      return res.status(400).json({ error: result.error });
+    }
+
+    await conn.query("UPDATE accounts SET balance = balance - ? WHERE id = ?", [
+      amount,
+      account.id,
+    ]);
+
+    await conn.query(
+      "INSERT INTO transactions (account_id, amount) VALUES (?, ?)",
+      [account.id, -amount],
+    );
+    await conn.commit();
+
+    res.status(200).json({ amount: balance - amount });
   } catch (error) {
     await conn.rollback();
     console.error(error);
