@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useAuth } from "../context/AuthContext";
 
 type Transaction = {
   id: number;
@@ -12,9 +13,9 @@ type Transaction = {
 export default function Transactions() {
   const [transactions, setTransactions] = useState<Transaction[] | null>(null);
   const router = useRouter();
+  const { token, setToken } = useAuth();
 
   useEffect(() => {
-    const token = localStorage.getItem("token");
     if (!token) {
       router.push("/login");
       return;
@@ -31,10 +32,10 @@ export default function Transactions() {
       })
       .then((data) => setTransactions(data))
       .catch(() => {
-        localStorage.removeItem("token");
+        setToken(null);
         router.push("/login");
       });
-  }, [router]);
+  }, [router, token, setToken]);
 
   if (transactions === null) {
     return (

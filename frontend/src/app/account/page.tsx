@@ -2,17 +2,18 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useAuth } from "../context/AuthContext";
 
 export default function Account() {
   const [amount, setAmount] = useState<number | null>(null);
   const [deposit, setDeposit] = useState("");
   const [error, setError] = useState("");
   const router = useRouter();
+  const { token, setToken } = useAuth();
   const [withdrawal, setWithdrawal] = useState("");
   const [withdrawError, setWithdrawError] = useState("");
 
   useEffect(() => {
-    const token = localStorage.getItem("token");
     if (!token) {
       router.push("/login");
       return;
@@ -20,33 +21,34 @@ export default function Account() {
     fetch(`${process.env.NEXT_PUBLIC_API_URL}/me/accounts`, {
       method: "POST",
       headers: {
+        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ token }),
     })
       .then((res) => {
-        if (!res.ok) throw new Error("Failed to fetch account balance");
+        if (!res.ok) throw new Error("Failed to fetch account data");
         return res.json();
       })
       .then((data) => setAmount(data.amount))
       .catch(() => {
-        localStorage.removeItem("token");
+        setToken(null);
         router.push("/login");
       });
-  }, [router]);
+  }, [router, token, setToken]);
 
   async function handleDeposit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-    const token = localStorage.getItem("token");
+
     const res = await fetch(
       `${process.env.NEXT_PUBLIC_API_URL}/me/accounts/transactions`,
       {
         method: "POST",
         headers: {
+          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ token, amount: Number(deposit) }),
+        body: JSON.stringify({ amount: Number(deposit) }),
       },
     );
     if (!res.ok) {
@@ -63,15 +65,16 @@ export default function Account() {
   async function handleWithdraw(e: React.FormEvent) {
     e.preventDefault();
     setWithdrawError("");
-    const token = localStorage.getItem("token");
+
     const res = await fetch(
       `${process.env.NEXT_PUBLIC_API_URL}/me/accounts/withdrawals`,
       {
         method: "POST",
         headers: {
+          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ token, amount: Number(withdrawal) }),
+        body: JSON.stringify({ amount: Number(withdrawal) }),
       },
     );
     if (!res.ok) {
@@ -83,6 +86,11 @@ export default function Account() {
     const data = await res.json();
     setAmount(data.amount);
     setWithdrawal("");
+  }
+
+  function handleLogout() {
+    setToken(null);
+    router.push("/login");
   }
 
   if (amount === null) {
@@ -170,6 +178,13 @@ export default function Account() {
       >
         View transactions →
       </Link>
+      <button
+        type="button"
+        onClick={handleLogout}
+        className="mt-4 text-sm text-gray-600 hover:underline"
+      >
+        Log out
+      </button>
     </div>
   );
 }

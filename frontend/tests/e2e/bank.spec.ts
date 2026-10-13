@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 
 const PASSWORD = "test-password";
+const API_URL = process.env.API_URL ?? "http://127.0.0.1:3003";
 
 function uniqueUsername() {
   return `user-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
@@ -58,7 +59,7 @@ test("new user can register, log in, deposit and see it in the history", async (
   await expect(page.getByText("+250.00 kr")).toBeVisible();
 });
 
-test("history persists after reload and new login, invalid amount changes nothing", async ({
+test("history persists after new login, invalid amount changes nothing", async ({
   page,
 }) => {
   const username = uniqueUsername();
@@ -73,7 +74,7 @@ test("history persists after reload and new login, invalid amount changes nothin
   await page.getByRole("button", { name: "Deposit" }).click();
   await expect(page.getByText("100.00 kr", { exact: true })).toBeVisible();
 
-  await page.reload();
+  await login(page, username);
   await expect(page.getByText("100.00 kr", { exact: true })).toBeVisible();
 
   await page.getByRole("link", { name: "View transactions" }).click();
@@ -97,19 +98,19 @@ test("two users have separate transaction histories", async ({ page }) => {
   await page.getByRole("button", { name: "Deposit" }).click();
   await expect(page.getByText("200.00 kr", { exact: true })).toBeVisible();
 
-  await page.goto("/transactions");
+  await page.getByRole("link", { name: "View transactions" }).click();
   await expect(page.getByRole("listitem")).toHaveCount(1);
   await expect(page.getByText("+200.00 kr")).toBeVisible();
   await expect(page.getByText("+100.00 kr")).toHaveCount(0);
 
   await login(page, userA);
-  await page.goto("/transactions");
+  await page.getByRole("link", { name: "View transactions" }).click();
   await expect(page.getByRole("listitem")).toHaveCount(1);
   await expect(page.getByText("+100.00 kr")).toBeVisible();
   await expect(page.getByText("+200.00 kr")).toHaveCount(0);
 });
 
-test("user can withdraw and see correct balance and history after reload", async ({
+test("user can withdraw and see correct balance and history after new login", async ({
   page,
 }) => {
   const username = uniqueUsername();
@@ -124,16 +125,17 @@ test("user can withdraw and see correct balance and history after reload", async
   await page.getByRole("button", { name: "Withdraw" }).click();
   await expect(page.getByText("60.00 kr", { exact: true })).toBeVisible();
 
-  await page.reload();
+  await login(page, username);
   await expect(page.getByText("60.00 kr", { exact: true })).toBeVisible();
 
-  await page.goto("/transactions");
+  await page.getByRole("link", { name: "View transactions" }).click();
   await expect(page.getByRole("listitem")).toHaveCount(2);
   await expect(page.getByText("+100.00 kr")).toBeVisible();
   await expect(page.getByText("-40.00 kr")).toBeVisible();
   await expect(page.getByText("Withdrawal", { exact: true })).toBeVisible();
 
-  await page.reload();
+  await login(page, username);
+  await page.getByRole("link", { name: "View transactions" }).click();
   await expect(page.getByRole("listitem")).toHaveCount(2);
   await expect(page.getByText("-40.00 kr")).toBeVisible();
   await expect(page.getByText("Withdrawal", { exact: true })).toBeVisible();
@@ -155,11 +157,73 @@ test("withdrawal larger than balance is denied and changes nothing", async ({
   await expect(page.getByText("Insufficient funds")).toBeVisible();
   await expect(page.getByText("100.00 kr", { exact: true })).toBeVisible();
 
-  await page.reload();
+  await login(page, username);
   await expect(page.getByText("100.00 kr", { exact: true })).toBeVisible();
 
-  await page.goto("/transactions");
+  await page.getByRole("link", { name: "View transactions" }).click();
   await expect(page.getByRole("listitem")).toHaveCount(1);
   await expect(page.getByText("+100.00 kr")).toBeVisible();
   await expect(page.getByText("-500.00 kr")).toHaveCount(0);
+});
+
+test("API: valid Bearer token works, missing or tampered token is denied", async ({
+  request,
+}) => {
+  const username = uniqueUsername();
+
+  const registerRes = await request.post(`${API_URL}/users`, {
+    data: { username, password: PASSWORD },
+  });
+  expect(registerRes.status()).toBe(201);
+
+  const loginRes = await request.post(`${API_URL}/sessions`, {
+    data: { username, password: PASSWORD },
+  });
+  expect(loginRes.status()).toBe(200);
+  const { token } = await loginRes.json();
+  expect(token.split(".")).toHaveLength(3);
+
+  const validRes = await request.post(`${API_URL}/me/accounts`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(validRes.status()).toBe(200);
+  expect(await validRes.json()).toEqual({ amount: 0 });
+
+  const missingRes = await request.post(`${API_URL}/me/accounts`);
+  expect(missingRes.status()).toBe(401);
+
+  const [header, payload, signature] = token.split(".");
+  const changedChar = signature[0] === "A" ? "B" : "A";
+  const tamperedToken = `${header}.${payload}.${changedChar}${signature.slice(1)}`;
+
+  const tamperedRes = await request.post(`${API_URL}/me/accounts`, {
+    headers: { Authorization: `Bearer ${tamperedToken}` },
+  });
+  expect(tamperedRes.status()).toBe(401);
+});
+test("API: wrong password gives 401 and no token", async ({ request }) => {
+  const username = uniqueUsername();
+  await request.post(`${API_URL}/users`, {
+    data: { username, password: PASSWORD },
+  });
+
+  const loginRes = await request.post(`${API_URL}/sessions`, {
+    data: { username, password: "wrong-password" },
+  });
+  expect(loginRes.status()).toBe(401);
+  const body = await loginRes.json();
+  expect(body.token).toBeUndefined();
+});
+test("log out clears the token and protected pages redirect to login", async ({
+  page,
+}) => {
+  const username = uniqueUsername();
+  await register(page, username);
+  await login(page, username);
+
+  await page.getByRole("button", { name: "Log out" }).click();
+  await expect(page).toHaveURL(/\/login/);
+
+  await page.goto("/account");
+  await expect(page).toHaveURL(/\/login/);
 });

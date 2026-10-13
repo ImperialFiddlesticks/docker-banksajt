@@ -56,7 +56,8 @@ jobs:
         run: npm test
   e2e:
     runs-on: ubuntu-latest
-
+    env:
+      JWT_SECRET: ${{ secrets.TEST_JWT_SECRET }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

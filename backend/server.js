@@ -1,10 +1,18 @@
 import express from "express";
 import bodyParser from "body-parser";
 import cors from "cors";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 
 import mysql from "mysql2/promise";
 import { validateAmount } from "./src/validateAmount.js";
 import { validateWithdrawal } from "./src/validateWithdrawal.js";
+
+const secret = process.env.JWT_SECRET;
+
+if (!secret || Buffer.byteLength(secret, "utf8") < 32) {
+  throw new Error("JWT_SECRET must be set and at least 32 bytes long");
+}
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
@@ -24,11 +32,39 @@ app.get("/health", (req, res) => {
   res.status(200).json({ status: "ok" });
 });
 
-// Generera engångslösenord
-function generateOTP() {
-  // Generera en sexsiffrig numerisk OTP
-  const otp = Math.floor(100000 + Math.random() * 900000);
-  return otp.toString();
+function requireAuth(req, res, next) {
+  const authHeader = req.get("authorization");
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res
+      .status(401)
+      .json({ error: "Missing or invalid authorization header" });
+  }
+  const token = authHeader.slice(7);
+
+  let payload;
+  try {
+    payload = jwt.verify(token, secret, {
+      algorithms: ["HS256"],
+      issuer: "banken",
+      audience: "banken-api",
+    });
+  } catch {
+    return res.status(401).json({ error: "Invalid or expired token" });
+  }
+
+  if (
+    typeof payload !== "object" ||
+    payload === null ||
+    typeof payload.sub !== "string"
+  ) {
+    return res.status(401).json({ error: "Invalid token" });
+  }
+  const userId = Number(payload.sub);
+  if (!Number.isSafeInteger(userId) || userId <= 0) {
+    return res.status(401).json({ error: "Invalid token" });
+  }
+  req.userId = userId;
+  next();
 }
 
 app.post("/users", async (req, res) => {
@@ -38,11 +74,17 @@ app.post("/users", async (req, res) => {
       .status(400)
       .json({ error: "Username and password are required" });
   }
+  if (password.length < 8) {
+    return res
+      .status(400)
+      .json({ error: "Password must be at least 8 characters long" });
+  }
 
   try {
+    const passwordHash = await bcrypt.hash(password, 12);
     const [result] = await pool.query(
-      "INSERT INTO users (username, password) VALUES (?, ?)",
-      [username, password],
+      "INSERT INTO users (username, password_hash) VALUES(?,?)",
+      [username, passwordHash],
     );
     const userId = result.insertId;
 
@@ -62,38 +104,40 @@ app.post("/users", async (req, res) => {
 
 app.post("/sessions", async (req, res) => {
   const { username, password } = req.body;
+  if (!username || !password) {
+    return res
+      .status(400)
+      .json({ error: "Username and password are required" });
+  }
 
   const [rows] = await pool.query(
-    "SELECT id FROM users WHERE username = ? AND password = ?",
-    [username, password],
+    "SELECT id, password_hash FROM users WHERE username = ?",
+    [username],
   );
-  if (rows.length === 0) {
-    return res.status(401).json({ error: "Incorrect username or password" });
+  const user = rows[0];
+  if (!user) {
+    return res.status(401).json({ error: "Invalid username or password" });
+  }
+  const passwordIsCorrect = await bcrypt.compare(password, user.password_hash);
+  if (!passwordIsCorrect) {
+    return res.status(401).json({ error: "Invalid username or password" });
   }
 
-  const token = generateOTP();
-  await pool.query("INSERT INTO sessions (token, user_id) VALUES (?, ?)", [
-    token,
-    rows[0].id,
-  ]);
+  const token = jwt.sign({ sub: String(user.id) }, secret, {
+    algorithm: "HS256",
+    issuer: "banken",
+    audience: "banken-api",
+    expiresIn: "15m",
+  });
+
   res.status(200).json({ token });
 });
-
-app.post("/me/accounts", async (req, res) => {
-  const { token } = req.body;
-
-  const [sessionRows] = await pool.query(
-    "SELECT user_id FROM sessions WHERE token = ?",
-    [token],
-  );
-  if (sessionRows.length === 0) {
-    return res.status(401).json({ error: "Invalid token" });
-  }
-
+app.post("/me/accounts", requireAuth, async (req, res) => {
   const [accountRows] = await pool.query(
     "SELECT balance FROM accounts WHERE user_id = ?",
-    [sessionRows[0].user_id],
+    [req.userId],
   );
+
   if (accountRows.length === 0) {
     return res.status(404).json({ error: "Account not found" });
   }
@@ -101,17 +145,10 @@ app.post("/me/accounts", async (req, res) => {
   res.status(200).json({ amount: Number(accountRows[0].balance) });
 });
 
-app.post("/me/accounts/transactions", async (req, res) => {
-  const { token, amount } = req.body;
+app.post("/me/accounts/transactions", requireAuth, async (req, res) => {
+  const { amount } = req.body;
   if (!validateAmount(amount)) {
     return res.status(400).json({ error: "Invalid amount" });
-  }
-  const [sessionRows] = await pool.query(
-    "SELECT user_id FROM sessions WHERE token = ?",
-    [token],
-  );
-  if (sessionRows.length === 0) {
-    return res.status(401).json({ error: "Invalid token" });
   }
 
   const conn = await pool.getConnection();
@@ -120,7 +157,7 @@ app.post("/me/accounts/transactions", async (req, res) => {
 
     const [accountRows] = await conn.query(
       "SELECT id, balance FROM accounts WHERE user_id = ? FOR UPDATE",
-      [sessionRows[0].user_id],
+      [req.userId],
     );
     if (accountRows.length === 0) {
       await conn.rollback();
@@ -149,17 +186,10 @@ app.post("/me/accounts/transactions", async (req, res) => {
   }
 });
 
-app.post("/me/accounts/withdrawals", async (req, res) => {
-  const { token, amount } = req.body;
+app.post("/me/accounts/withdrawals", requireAuth, async (req, res) => {
+  const { amount } = req.body;
   if (!validateAmount(amount)) {
     return res.status(400).json({ error: "Invalid amount" });
-  }
-  const [sessionRows] = await pool.query(
-    "SELECT user_id FROM sessions WHERE token = ?",
-    [token],
-  );
-  if (sessionRows.length === 0) {
-    return res.status(401).json({ error: "Invalid token" });
   }
 
   const conn = await pool.getConnection();
@@ -168,7 +198,7 @@ app.post("/me/accounts/withdrawals", async (req, res) => {
 
     const [accountRows] = await conn.query(
       "SELECT id, balance FROM accounts WHERE user_id = ? FOR UPDATE",
-      [sessionRows[0].user_id],
+      [req.userId],
     );
     if (accountRows.length === 0) {
       await conn.rollback();
@@ -204,29 +234,14 @@ app.post("/me/accounts/withdrawals", async (req, res) => {
   }
 });
 
-app.get("/me/accounts/transactions", async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "Missing token" });
-  }
-
-  const token = authHeader.slice(7);
-
-  const [sessionRows] = await pool.query(
-    "SELECT user_id FROM sessions WHERE token = ?",
-    [token],
-  );
-  if (sessionRows.length === 0) {
-    return res.status(401).json({ error: "Invalid token" });
-  }
-
+app.get("/me/accounts/transactions", requireAuth, async (req, res) => {
   const [rows] = await pool.query(
     `SELECT t.id, t.amount, t.created_at
     FROM transactions t
     JOIN accounts a ON a.id = t.account_id
     WHERE a.user_id = ?
     ORDER BY t.created_at DESC, t.id DESC`,
-    [sessionRows[0].user_id],
+    [req.userId],
   );
 
   res.status(200).json(
