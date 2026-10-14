@@ -4,7 +4,7 @@ A Dockerized bank site: Next.js frontend, Express backend, MySQL database, orche
 
 **Live site:** http://16.171.185.223
 
-**Green Actions:** https://github.com/ImperialFiddlesticks/docker-banksajt/actions/runs/38390100412
+**Green Actions:** https://github.com/ImperialFiddlesticks/docker-banksajt/actions/runs/38534495537
 
 ## Stack
 
