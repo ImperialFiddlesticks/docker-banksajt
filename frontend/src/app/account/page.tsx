@@ -2,39 +2,29 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useAuth } from "../context/AuthContext";
 
 export default function Account() {
   const [amount, setAmount] = useState<number | null>(null);
   const [deposit, setDeposit] = useState("");
   const [error, setError] = useState("");
   const router = useRouter();
-  const { token, setToken } = useAuth();
   const [withdrawal, setWithdrawal] = useState("");
   const [withdrawError, setWithdrawError] = useState("");
 
   useEffect(() => {
-    if (!token) {
-      router.push("/login");
-      return;
-    }
     fetch(`${process.env.NEXT_PUBLIC_API_URL}/me/accounts`, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
+      credentials: "include",
     })
       .then((res) => {
-        if (!res.ok) throw new Error("Failed to fetch account data");
+        if (!res.ok) throw new Error("Failed to fetch account");
         return res.json();
       })
       .then((data) => setAmount(data.amount))
       .catch(() => {
-        setToken(null);
         router.push("/login");
       });
-  }, [router, token, setToken]);
+  }, [router]);
 
   async function handleDeposit(e: React.FormEvent) {
     e.preventDefault();
@@ -44,8 +34,8 @@ export default function Account() {
       `${process.env.NEXT_PUBLIC_API_URL}/me/accounts/transactions`,
       {
         method: "POST",
+        credentials: "include",
         headers: {
-          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ amount: Number(deposit) }),
@@ -70,8 +60,8 @@ export default function Account() {
       `${process.env.NEXT_PUBLIC_API_URL}/me/accounts/withdrawals`,
       {
         method: "POST",
+        credentials: "include",
         headers: {
-          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ amount: Number(withdrawal) }),
@@ -88,8 +78,11 @@ export default function Account() {
     setWithdrawal("");
   }
 
-  function handleLogout() {
-    setToken(null);
+  async function handleLogout() {
+    await fetch(`${process.env.NEXT_PUBLIC_API_URL}/logout`, {
+      method: "POST",
+      credentials: "include",
+    });
     router.push("/login");
   }
 
