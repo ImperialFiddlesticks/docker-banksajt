@@ -166,8 +166,9 @@ test("withdrawal larger than balance is denied and changes nothing", async ({
   await expect(page.getByText("-500.00 kr")).toHaveCount(0);
 });
 
-test("API: valid Bearer token works, missing or tampered token is denied", async ({
+test("API: login sets an httpOnly cookie, the cookie gives access, missing or tampered cookie is denied", async ({
   request,
+  playwright,
 }) => {
   const username = uniqueUsername();
 
@@ -180,27 +181,36 @@ test("API: valid Bearer token works, missing or tampered token is denied", async
     data: { username, password: PASSWORD },
   });
   expect(loginRes.status()).toBe(200);
-  const { token } = await loginRes.json();
-  expect(token.split(".")).toHaveLength(3);
+  const loginBody = await loginRes.json();
+  expect(loginBody.token).toBeUndefined();
 
-  const validRes = await request.post(`${API_URL}/me/accounts`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const { cookies } = await request.storageState();
+  const accessCookie = cookies.find((c) => c.name === "access_token");
+  expect(accessCookie?.httpOnly).toBe(true);
+  expect(accessCookie?.sameSite).toBe("Lax");
+
+  const validRes = await request.post(`${API_URL}/me/accounts`);
   expect(validRes.status()).toBe(200);
   expect(await validRes.json()).toEqual({ amount: 0 });
 
-  const missingRes = await request.post(`${API_URL}/me/accounts`);
+  const otherBrowser = await playwright.request.newContext();
+
+  const missingRes = await otherBrowser.post(`${API_URL}/me/accounts`);
   expect(missingRes.status()).toBe(401);
 
+  const token = accessCookie?.value ?? "";
   const [header, payload, signature] = token.split(".");
   const changedChar = signature[0] === "A" ? "B" : "A";
   const tamperedToken = `${header}.${payload}.${changedChar}${signature.slice(1)}`;
 
-  const tamperedRes = await request.post(`${API_URL}/me/accounts`, {
-    headers: { Authorization: `Bearer ${tamperedToken}` },
+  const tamperedRes = await otherBrowser.post(`${API_URL}/me/accounts`, {
+    headers: { Cookie: `access_token=${tamperedToken}` },
   });
   expect(tamperedRes.status()).toBe(401);
+
+  await otherBrowser.dispose();
 });
+
 test("API: wrong password gives 401 and no token", async ({ request }) => {
   const username = uniqueUsername();
   await request.post(`${API_URL}/users`, {
@@ -213,16 +223,46 @@ test("API: wrong password gives 401 and no token", async ({ request }) => {
   expect(loginRes.status()).toBe(401);
   const body = await loginRes.json();
   expect(body.token).toBeUndefined();
+  expect(loginRes.headers()["set-cookie"]).toBeUndefined();
 });
-test("log out clears the token and protected pages redirect to login", async ({
+
+test("logged-in user sees the account via an httpOnly cookie that JavaScript cannot read", async ({
+  page,
+}) => {
+  const username = uniqueUsername();
+  await register(page, username);
+  await login(page, username);
+  await expect(page.getByText("0.00 kr")).toBeVisible();
+
+  const cookies = await page.context().cookies(API_URL);
+  const accessCookie = cookies.find((c) => c.name === "access_token");
+  expect(accessCookie?.httpOnly).toBe(true);
+
+  const visibleToJavaScript = await page.evaluate(() => document.cookie);
+  expect(visibleToJavaScript).not.toContain("access_token");
+
+  await page.reload();
+  await expect(page.getByText("0.00 kr")).toBeVisible();
+});
+
+test("log out clears the cookie and the account can no longer be fetched in the same browser", async ({
   page,
 }) => {
   const username = uniqueUsername();
   await register(page, username);
   await login(page, username);
 
+  const accountBefore = await page.request.post(`${API_URL}/me/accounts`);
+  expect(accountBefore.status()).toBe(200);
+
   await page.getByRole("button", { name: "Log out" }).click();
   await expect(page).toHaveURL(/\/login/);
+
+  const cookies = await page.context().cookies(API_URL);
+  expect(cookies.find((c) => c.name === "access_token")).toBeUndefined();
+
+  const accountAfter = await page.request.post(`${API_URL}/me/accounts`);
+  expect(accountAfter.status()).toBe(401);
 
   await page.goto("/account");
   await expect(page).toHaveURL(/\/login/);

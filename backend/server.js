@@ -3,6 +3,7 @@ import bodyParser from "body-parser";
 import cors from "cors";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import cookieParser from "cookie-parser";
 
 import mysql from "mysql2/promise";
 import { validateAmount } from "./src/validateAmount.js";
@@ -12,6 +13,11 @@ const secret = process.env.JWT_SECRET;
 
 if (!secret || Buffer.byteLength(secret, "utf8") < 32) {
   throw new Error("JWT_SECRET must be set and at least 32 bytes long");
+}
+const frontendOrigin = process.env.FRONTEND_ORIGIN;
+
+if (!frontendOrigin) {
+  throw new Error("FRONTEND_ORIGIN must be set");
 }
 
 const pool = mysql.createPool({
@@ -26,20 +32,18 @@ const app = express();
 const port = process.env.PORT || 3001;
 
 // Middleware
-app.use(cors());
+app.use(cors({ origin: frontendOrigin, credentials: true }));
 app.use(bodyParser.json());
+app.use(cookieParser());
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "ok" });
 });
 
 function requireAuth(req, res, next) {
-  const authHeader = req.get("authorization");
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res
-      .status(401)
-      .json({ error: "Missing or invalid authorization header" });
+  const token = req.cookies.access_token;
+  if (typeof token !== "string" || token === "") {
+    return res.status(401).json({ error: "Not logged in" });
   }
-  const token = authHeader.slice(7);
 
   let payload;
   try {
@@ -102,6 +106,13 @@ app.post("/users", async (req, res) => {
   }
 });
 
+const cookieOptions = {
+  httpOnly: true,
+  secure: process.env.COOKIE_SECURE === "true",
+  sameSite: "lax",
+  path: "/",
+};
+
 app.post("/sessions", async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
@@ -130,7 +141,16 @@ app.post("/sessions", async (req, res) => {
     expiresIn: "15m",
   });
 
-  res.status(200).json({ token });
+  res.cookie("access_token", token, {
+    ...cookieOptions,
+    maxAge: 15 * 60 * 1000,
+  });
+  res.status(200).json({ message: "Login successful" });
+});
+
+app.post("/logout", (req, res) => {
+  res.clearCookie("access_token", cookieOptions);
+  res.status(200).json({ message: "Logged out" });
 });
 app.post("/me/accounts", requireAuth, async (req, res) => {
   const [accountRows] = await pool.query(

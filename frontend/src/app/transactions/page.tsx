@@ -2,7 +2,6 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useAuth } from "../context/AuthContext";
 
 type Transaction = {
   id: number;
@@ -13,18 +12,10 @@ type Transaction = {
 export default function Transactions() {
   const [transactions, setTransactions] = useState<Transaction[] | null>(null);
   const router = useRouter();
-  const { token, setToken } = useAuth();
 
   useEffect(() => {
-    if (!token) {
-      router.push("/login");
-      return;
-    }
-
     fetch(`${process.env.NEXT_PUBLIC_API_URL}/me/accounts/transactions`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
+      credentials: "include",
     })
       .then((res) => {
         if (!res.ok) throw new Error("Failed to fetch transactions");
@@ -32,10 +23,9 @@ export default function Transactions() {
       })
       .then((data) => setTransactions(data))
       .catch(() => {
-        setToken(null);
         router.push("/login");
       });
-  }, [router, token, setToken]);
+  }, [router]);
 
   if (transactions === null) {
     return (
