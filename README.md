@@ -13,6 +13,26 @@ A Dockerized bank site: Next.js frontend, Express backend, MySQL database, orche
 - `database/init.sql` — schema (`users`, `accounts`, `transactions`). Passwords are stored as bcrypt hashes in `users.password_hash`.
 - `docker-compose.yml` — runs all three services together
 
+## Authentication
+
+Login uses a JWT stored in an `httpOnly` cookie. The frontend never sees the token.
+
+```
+Log in (POST /sessions)
+    ↓
+Express checks the password with bcrypt, creates a JWT (sub = user id, expires in 15 min)
+    ↓
+Express sends Set-Cookie: access_token=<JWT>; HttpOnly; SameSite=Lax; Path=/; Max-Age=900
+    ↓
+The browser stores the cookie and sends it automatically (fetch with credentials: "include")
+    ↓
+requireAuth reads req.cookies.access_token, verifies the JWT and sets req.userId
+```
+
+- `POST /logout` clears the cookie with the same settings it was created with.
+- CORS only allows the exact frontend origin (`FRONTEND_ORIGIN`) with `credentials: true`, never `*`.
+- The cookie's `secure` flag is controlled by `COOKIE_SECURE`. It is `false` by default because the deployed site currently runs on plain HTTP, and browsers do not store `Secure` cookies over HTTP. Set `COOKIE_SECURE=true` once the site is served over HTTPS.
+
 ## Running locally
 
 1. Create a `.env` file in the project root (next to `docker-compose.yml`). It is ignored by Git.
@@ -41,8 +61,10 @@ A Dockerized bank site: Next.js frontend, Express backend, MySQL database, orche
 
    If you have an old database from before password hashing was added, reset it first with `docker compose down -v`. This deletes all data, and `database/init.sql` runs again on the next start.
 
-- Frontend: http://localhost:3002
-- Backend: http://localhost:3003
+- Frontend: http://127.0.0.1:3002
+- Backend: http://127.0.0.1:3003
+
+Open the frontend at `127.0.0.1`, not `localhost`. The browser treats them as different origins, and the backend's CORS setting only allows `http://127.0.0.1:3002` by default.
 
 ## Environment variables
 
@@ -51,6 +73,8 @@ A Dockerized bank site: Next.js frontend, Express backend, MySQL database, orche
 | `JWT_SECRET`                | `.env` in project root | Yes      | Key used to sign and verify JWTs. At least 32 bytes. The backend refuses to start without it. Use a different value locally, in tests and on EC2. |
 | `NEXT_PUBLIC_API_URL`       | `.env` in project root | No       | Backend URL used by the frontend. Defaults to `http://127.0.0.1:3003`.                                                                            |
 | `NEXT_PUBLIC_FEATURE_PROMO` | `.env` in project root | No       | Feature flag for the promo banner. Defaults to `false`.                                                                                           |
+| `FRONTEND_ORIGIN`           | `.env` in project root | No       | The exact frontend origin allowed by CORS (no trailing slash). Defaults to `http://127.0.0.1:3002`.                                               |
+| `COOKIE_SECURE`             | `.env` in project root | No       | Set to `true` to give the login cookie the `Secure` flag. Only use it when the site runs over HTTPS. Defaults to `false`.                          |
 
 The database variables (`DB_HOST`, `DB_USER`, `DB_PASSWORD` and so on) are set in `docker-compose.yml`.
 
@@ -63,7 +87,15 @@ The database variables (`DB_HOST`, `DB_USER`, `DB_PASSWORD` and so on) are set i
 | `EC2_USER`        | SSH user on the EC2 server                               |
 | `EC2_SSH_KEY`     | Private SSH key used by the deploy job                   |
 
-On EC2, `JWT_SECRET` is stored in a `.env` file in the project folder on the server (not in Git, `chmod 600`).
+### EC2
+
+The server has its own `.env` file in the project folder (not in Git, `chmod 600`) with:
+
+- `JWT_SECRET`: its own random value, different from the local and test values
+- `NEXT_PUBLIC_API_URL=http://16.171.185.223:3003`
+- `FRONTEND_ORIGIN=http://16.171.185.223`
+
+`COOKIE_SECURE` is not set there, because the site does not use HTTPS yet.
 
 ## Running the tests
 
@@ -84,7 +116,13 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-The e2e tests cover registration, login, deposits, withdrawals, log out, and the API directly: a valid Bearer token is accepted, while a missing or tampered token gets `401`, and a wrong password gets no token.
+The e2e tests cover registration, login, deposits, withdrawals and log out. They also check that:
+
+- login sets an `httpOnly`, `SameSite=Lax` cookie and returns no token in the JSON
+- a logged-in user can fetch their account via the cookie, while a missing or tampered cookie gets `401`
+- JavaScript on the page cannot read the cookie (`document.cookie`)
+- after logging out, the cookie is gone and the account can no longer be fetched in the same browser
+- a wrong password gives neither a token nor a cookie
 
 `npx playwright install chromium` is only needed the first time.
 
@@ -104,11 +142,11 @@ Hashing a password is one-way: the password is turned into a hash that cannot be
 
 **4. What is the risk of storing a token in localStorage if the site has an XSS vulnerability?**
 
-XSS means an attacker manages to run their own Javascript on our site. Any JavaScript running on the page can read localStorage, meaning the attacker's script could read any token found within and send it to their own server. The attacker can then use that token to act as the user from their own computer, see the balance, make deposits and withdrawals etc. Tokens in localstorage also stay after the tab is closed which gives more time to steal them.
+XSS means an attacker manages to run their own Javascript on our site. Any JavaScript running on the page can read localStorage, meaning the attacker's script could read any token found within and send it to their own server. The attacker can then use that token to act as the user from their own computer, see the balance, make deposits and withdrawals etc. Tokens in localstorage also stay after the tab is closed which gives more time to steal them. That is why our app stores the token in an `httpOnly` cookie instead: JavaScript, including an attacker's script, cannot read it at all.
 
 **5. Why can't the server automatically know that a JWT should stop working when the user clicks Log out?**
 
-A JWT is stateless. The server does not store the tokens it has issued. When a request comes in, jwt.verify only checks the signature, the issuer and the expiry time, all of which are inside the token itself. So when the user clicks Log out, we only remove the token from React state in the browser. The server is never told and has no list to remove it from. A copy of the token would still be accepted until it expires. To revoke JWTs the server would need to store something again, or rely on a short expiry time like our 15 minutes.
+A JWT is stateless. The server does not store the tokens it has issued. When a request comes in, jwt.verify only checks the signature, the issuer and the expiry time, all of which are inside the token itself. So when the user clicks Log out, `POST /logout` only tells the browser to delete the cookie. The token itself is not revoked, because the server has no list to remove it from. A copy of the token would still be accepted until it expires. To revoke JWTs the server would need to store something again, or rely on a short expiry time like our 15 minutes.
 
 **6. Which secrets are in your project, and where should they be stored locally, in GitHub Actions and on EC2?**
 
